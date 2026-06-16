@@ -1,0 +1,159 @@
+name: Build Android
+on:
+  push:
+    branches: 
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 */6 * *'  # 6일마다
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      KIVY_GL_BACKEND: 'gl'
+      CFLAGS: "-I$HOME/.buildozer/android/platform/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+      LDFLAGS: "-L$HOME/.buildozer/android/platform/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
+      PYTHONPATH: "$PYTHONPATH:$HOME/.buildozer/android/platform/android-sdk/tools/lib"
+      JAVA_HOME: "/usr/lib/jvm/temurin-17-jdk-amd64"
+      # NDK r28 및 16KB 페이지 크기 지원을 위한 환경변수
+      APP_SUPPORT_FLEXIBLE_PAGE_SIZES: "true"
+      NDK_TOOLCHAIN_VERSION: "clang"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get Date
+        id: get-date
+        run: |
+          echo "date=$(date -u '+%Y%m%d')" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Cache Buildozer global directory
+        uses: actions/cache@v5
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ runner.os }}-${{ steps.get-date.outputs.date }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-global-${{ runner.os }}-
+      - name: Cache Buildozer directory in app
+        uses: actions/cache@v5
+        with:
+          path: .buildozer
+          key: ${{ runner.os }}-buildozer-${{ github.run_id }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-
+      - name: Cache Android SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.buildozer/android/platform/android-sdk
+          key: ${{ runner.os }}-android-sdk-${{ steps.get-date.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-
+      - name: Cache Android NDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.buildozer/android/platform/android-ndk-r28
+          key: ${{ runner.os }}-android-ndk-${{ steps.get-date.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-android-ndk-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            ffmpeg \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            liblzma-dev \
+            uuid-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libunwind-dev \
+            zlib1g-dev \
+            libgstreamer1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            zip \
+            unzip \
+            gettext \
+            autopoint \
+            autoconf \
+            libtool \
+            pkg-config \
+            libncurses5-dev \
+            libncursesw5-dev \
+            cmake \
+            libffi-dev \
+            libssl-dev \
+            libltdl-dev \
+            automake \
+            libsqlite3-dev \
+            sqlite3 \
+            bzip2 \
+            libbz2-dev \
+            zlib1g-dev \
+            openssl \
+            libgdbm-dev \
+            libgdbm-compat-dev \
+            libnss3-dev \
+            liblzma-dev \
+            libreadline-dev \
+            uuid-dev
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11.0'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 최신 develop 브랜치의 python-for-android 설치 (NDK r28 지원)
+          pip install git+https://github.com/kivy/python-for-android.git@develop
+          pip install buildozer cython==0.29.33
+      
+      - name: Build with Buildozer
+        run: |
+          export PATH=$JAVA_HOME/bin:$PATH
+          export PYTHONPATH="${PYTHONPATH}:${HOME}/.buildozer/android/platform/build-arm64-v8a/build/other_builds/python3-liblzma/arm64-v8a__ndk_target_28/python3/Include"
+          export CFLAGS="-I${HOME}/.buildozer/android/platform/build-arm64-v8a/build/other_builds/python3-liblzma/arm64-v8a__ndk_target_28/python3/Include"
+          export LDFLAGS="-L${HOME}/.buildozer/android/platform/build-arm64-v8a/build/other_builds/python3-liblzma/arm64-v8a__ndk_target_28/python3/android-build"
+          
+          # NDK r28 및 16KB 페이지 크기 지원 환경변수 설정
+          export APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true
+          export NDK_TOOLCHAIN_VERSION=clang
+          export ANDROID_NDK_ROOT="$HOME/.buildozer/android/platform/android-ndk-r28"
+          export NDK_ROOT="$HOME/.buildozer/android/platform/android-ndk-r28"
+          yes | buildozer -v android debug
+        env:
+          BUILDOZER_WARN_ON_ROOT: 0
+          APP_SUPPORT_FLEXIBLE_PAGE_SIZES: "true"
+          NDK_TOOLCHAIN_VERSION: "clang"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: |
+            bin/*.apk
+            bin/*.aab
+          retention-days: 7  # 보관기간 9일로 설정
